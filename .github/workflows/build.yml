@@ -1,0 +1,71 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # idf-component-manager 2.2.2 (bundled in the v5.5 image) aborts the
+      # dependency solve on LVGL's LV_USE_FREETYPE gate pulled via the Tab5 BSP.
+      # Manager 3.x fixes it but IDF pins ~=2.2, so install 3.x and relax that
+      # one pin. (PIP_CONSTRAINT cleared so IDF's constraint file doesn't block it.)
+      - name: Build P4 app
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32p4
+          path: '.'
+          command: "PIP_CONSTRAINT= pip install -U idf-component-manager && sed -i 's/^idf-component-manager.*/idf-component-manager/' /opt/esp/idf/tools/requirements/requirements.core.txt && idf.py build"
+
+      - name: Merge image
+        run: |
+          python -m pip install --quiet esptool
+          cd build
+          esptool.py --chip esp32p4 merge_bin -o ../merged-p4.bin @flash_args
+          ls -la ../merged-p4.bin
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: runnersreign-p4
+          path: merged-p4.bin
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect binary into the web flasher
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp -r webflasher/* _site/
+          cp _artifacts/runnersreign-p4/merged-p4.bin _site/merged-p4.bin
+          SHA="${GITHUB_SHA::7}"
+          echo "Stamping build $SHA into flasher"
+          sed -i "s|merged-p4.bin|merged-p4.bin?v=$SHA|g" _site/manifest-p4.json
+          sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"$SHA\"|" _site/manifest-p4.json
+          sed -i "s|manifest=\"manifest-p4.json\"|manifest=\"manifest-p4.json?v=$SHA\"|g" _site/index.html
+          cat _site/manifest-p4.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

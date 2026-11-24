@@ -1,0 +1,12 @@
+# Managed component dependencies for the Runner's Reign P4 app.
+dependencies:
+  idf: ">=5.5"
+
+  # Tab5 display BSP — MIPI-DSI panel, GT911 touch, display power rail, LVGL
+  # (via esp_lvgl_port). Provides bsp_display_start().
+  espressif/m5stack_tab5: "^1.3.0"
+
+  # Pin esp_lvgl_port to 2.8.0: 2.9.0 uses an esp_lcd callback newer than the
+  # stable IDF v5.5 image. 2.8.0 satisfies the BSP's ^2 range and boots on
+  # esp32p4-eco2 silicon.
+  espressif/esp_lvgl_port: "==2.8.0"

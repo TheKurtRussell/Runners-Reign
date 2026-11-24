@@ -1,0 +1,38 @@
+# Runner's Reign P4 app — build defaults
+# Target: esp32p4  (idf.py set-target esp32p4)
+
+# --- PSRAM (Tab5 has 32MB Octal PSRAM) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# --- Flash (16MB) + partitions ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Console on the P4's own USB-serial-jtag ---
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- Display: MIPI-DSI panel via m5stack_tab5 BSP + esp_lvgl_port ---
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# LVGL (v9, via the BSP): disable optional image/font deps whose Kconfig symbols
+# must resolve at dependency-solve time, and set RGB565 + a generous object pool.
+CONFIG_LV_USE_FREETYPE=n
+CONFIG_LV_USE_THORVG=n
+CONFIG_LV_USE_LODEPNG=n
+CONFIG_LV_USE_LIBPNG=n
+CONFIG_LV_USE_FFMPEG=n
+CONFIG_LV_USE_RLOTTIE=n
+CONFIG_LV_USE_TINY_TTF=n
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_MEM_SIZE_KILOBYTES=320
+# Larger built-in font for readable body text on a 1280x720 panel.
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
