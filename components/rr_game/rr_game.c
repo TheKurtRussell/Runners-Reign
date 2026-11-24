@@ -19,7 +19,7 @@
 #include "esp_heap_caps.h"
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
-#include "rr_scenes.h"
+#include "rr_iso.h"
 
 #define TAG "rr_game"
 
@@ -303,12 +303,9 @@ static void hud_inv_cb(lv_event_t *e)  { (void)e; if (!s_overlay) open_inv(); }
 
 static void repaint_scene(void)
 {
-    if (!s_canvas) return;
-    lv_canvas_fill_bg(s_canvas, lv_color_hex(C_BG), LV_OPA_COVER);
-    lv_layer_t layer;
-    lv_canvas_init_layer(s_canvas, &layer);
-    rr_paint_room(&layer, g.room);
-    lv_canvas_finish_layer(s_canvas, &layer);
+    if (!s_canvas || !s_canvas_buf) return;
+    rr_iso_render((uint16_t *)s_canvas_buf, RR_ART_W, RR_ART_H, g.room);
+    lv_obj_invalidate(s_canvas);
 }
 
 static void render_room(void)
@@ -330,10 +327,20 @@ static void render_room(void)
         const rr_hotspot_t *h = &r->spots[i];
         if (h->hide_flag >= 0 && g.flag[h->hide_flag]) continue;
 
+        /* place the touch zone over the sprite the hotspot maps to; fall back
+         * to the hotspot's own coords for ambient spots with no iso object */
+        int zx, zy, zw, zh;
+        if (!rr_iso_hotspot_rect(g.room, i, &zx, &zy, &zw, &zh)) {
+            zx = h->x; zy = h->y; zw = h->w; zh = h->h;
+        }
+        /* pad small sprites so characters/doors are comfortable to tap */
+        if (zw < 120) { zx -= (120 - zw) / 2; zw = 120; }
+        if (zh < 120) { zy -= (120 - zh) / 2; zh = 120; }
+
         lv_obj_t *z = lv_obj_create(s_zones);
         lv_obj_remove_style_all(z);
-        lv_obj_set_pos(z, h->x, h->y);
-        lv_obj_set_size(z, h->w, h->h);
+        lv_obj_set_pos(z, zx, zy);
+        lv_obj_set_size(z, zw, zh);
         lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_color(z, lv_color_hex(r->accent), 0);
         lv_obj_set_style_border_width(z, 2, 0);
@@ -352,7 +359,7 @@ static void render_room(void)
         lv_obj_set_style_pad_hor(cap, 6, 0);
         lv_obj_set_style_pad_ver(cap, 2, 0);
         lv_obj_set_style_radius(cap, 4, 0);
-        lv_obj_set_pos(cap, h->x + 6, h->y + h->h - 26);
+        lv_obj_set_pos(cap, zx + 6, zy + zh - 26);
     }
 
     if (s_canvas) lv_obj_move_background(s_canvas);
