@@ -32,6 +32,8 @@ CONFIG_LV_USE_RLOTTIE=n
 CONFIG_LV_USE_TINY_TTF=n
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_MEM_SIZE_KILOBYTES=320
+# Painted scenes are drawn into an lv_canvas.
+CONFIG_LV_USE_CANVAS=y
 # Larger built-in font for readable body text on a 1280x720 panel.
 CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_22=y

@@ -16,8 +16,10 @@
 #include <stdint.h>
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
+#include "rr_scenes.h"
 
 #define TAG "rr_game"
 
@@ -47,7 +49,10 @@ static const char *k_attr_names[5] = { "Body", "Strength", "Charisma",
 static rr_state_t g;
 
 /* persistent UI */
-static lv_obj_t *s_room_layer;
+static lv_obj_t *s_canvas;       /* painted scene (full-screen pixel buffer) */
+static void     *s_canvas_buf;   /* PSRAM backing store for the canvas */
+static lv_obj_t *s_zones;        /* transparent touch zones over the art */
+static lv_obj_t *s_hud;          /* top bar + message panel + char/inv buttons */
 static lv_obj_t *s_loc;
 static lv_obj_t *s_stat;
 static lv_obj_t *s_msg;
@@ -296,30 +301,62 @@ static void hotspot_cb(lv_event_t *e)
 static void hud_char_cb(lv_event_t *e) { (void)e; if (!s_overlay) open_char(); }
 static void hud_inv_cb(lv_event_t *e)  { (void)e; if (!s_overlay) open_inv(); }
 
+static void repaint_scene(void)
+{
+    if (!s_canvas) return;
+    lv_canvas_fill_bg(s_canvas, lv_color_hex(C_BG), LV_OPA_COVER);
+    lv_layer_t layer;
+    lv_canvas_init_layer(s_canvas, &layer);
+    rr_paint_room(&layer, g.room);
+    lv_canvas_finish_layer(s_canvas, &layer);
+}
+
 static void render_room(void)
 {
     const rr_room_t *r = &rr_rooms[g.room];
 
-    if (s_room_layer) lv_obj_delete(s_room_layer);
-    s_room_layer = lv_obj_create(lv_screen_active());
-    lv_obj_remove_style_all(s_room_layer);
-    lv_obj_set_size(s_room_layer, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(s_room_layer, lv_color_hex(r->bg), 0);
-    lv_obj_set_style_bg_opa(s_room_layer, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(s_room_layer, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_move_background(s_room_layer);   /* keep HUD on top */
+    repaint_scene();
 
-    /* scene description */
-    lv_obj_t *desc = mk_label(s_room_layer, r->desc, C_DIM, &lv_font_montserrat_16, 1180);
-    lv_obj_align(desc, LV_ALIGN_TOP_LEFT, 50, 86);
+    /* rebuild the transparent touch zones laid over the painted scene */
+    if (s_zones) lv_obj_delete(s_zones);
+    s_zones = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(s_zones);
+    lv_obj_set_size(s_zones, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_zones, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(s_zones, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_zones, LV_OBJ_FLAG_CLICKABLE);
 
-    /* hotspots */
     for (int i = 0; i < r->n_spots; i++) {
         const rr_hotspot_t *h = &r->spots[i];
         if (h->hide_flag >= 0 && g.flag[h->hide_flag]) continue;
-        mk_btn(s_room_layer, h->name, h->x, h->y, h->w, h->h,
-               r->accent, hotspot_cb, (void *)(intptr_t)i);
+
+        lv_obj_t *z = lv_obj_create(s_zones);
+        lv_obj_remove_style_all(z);
+        lv_obj_set_pos(z, h->x, h->y);
+        lv_obj_set_size(z, h->w, h->h);
+        lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_color(z, lv_color_hex(r->accent), 0);
+        lv_obj_set_style_border_width(z, 2, 0);
+        lv_obj_set_style_border_opa(z, 80, 0);          /* subtle "interactive" hint */
+        lv_obj_set_style_radius(z, 10, 0);
+        lv_obj_remove_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(z, hotspot_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        lv_obj_t *cap = lv_label_create(s_zones);
+        lv_label_set_text(cap, h->name);
+        lv_obj_set_style_text_color(cap, lv_color_hex(r->accent), 0);
+        lv_obj_set_style_text_font(cap, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_bg_color(cap, lv_color_hex(0x05030E), 0);
+        lv_obj_set_style_bg_opa(cap, 160, 0);
+        lv_obj_set_style_pad_hor(cap, 6, 0);
+        lv_obj_set_style_pad_ver(cap, 2, 0);
+        lv_obj_set_style_radius(cap, 4, 0);
+        lv_obj_set_pos(cap, h->x + 6, h->y + h->h - 26);
     }
+
+    if (s_canvas) lv_obj_move_background(s_canvas);
+    if (s_hud)    lv_obj_move_foreground(s_hud);
 
     update_hud();
     set_msg(r->desc);
@@ -328,21 +365,35 @@ static void render_room(void)
 /* ------------------------------------------------------------- start ------- */
 static void build_hud(void)
 {
-    lv_obj_t *scr = lv_screen_active();
+    s_hud = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(s_hud);
+    lv_obj_set_size(s_hud, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_hud, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(s_hud, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_hud, LV_OBJ_FLAG_CLICKABLE);
 
-    s_loc = mk_label(scr, "", C_NEON, &lv_font_montserrat_22, 0);
-    lv_obj_align(s_loc, LV_ALIGN_TOP_LEFT, 24, 20);
+    /* top-bar readability strip behind the location + stats */
+    lv_obj_t *bar = lv_obj_create(s_hud);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, LV_PCT(100), 60);
+    lv_obj_set_pos(bar, 0, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x05030E), 0);
+    lv_obj_set_style_bg_opa(bar, 150, 0);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_stat = mk_label(scr, "", C_CYAN, &lv_font_montserrat_16, 0);
-    lv_obj_align(s_stat, LV_ALIGN_TOP_RIGHT, -24, 26);
+    s_loc = mk_label(s_hud, "", C_NEON, &lv_font_montserrat_22, 0);
+    lv_obj_align(s_loc, LV_ALIGN_TOP_LEFT, 24, 16);
+
+    s_stat = mk_label(s_hud, "", C_CYAN, &lv_font_montserrat_16, 0);
+    lv_obj_align(s_stat, LV_ALIGN_TOP_RIGHT, -24, 20);
 
     /* message/narration panel across the bottom */
-    lv_obj_t *panel = lv_obj_create(scr);
+    lv_obj_t *panel = lv_obj_create(s_hud);
     lv_obj_remove_style_all(panel);
     lv_obj_set_size(panel, LV_PCT(70), 150);
     lv_obj_align(panel, LV_ALIGN_BOTTOM_LEFT, 20, -16);
     lv_obj_set_style_bg_color(panel, lv_color_hex(C_PANEL), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(panel, 220, 0);
     lv_obj_set_style_radius(panel, 14, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x2E2452), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
@@ -351,14 +402,23 @@ static void build_hud(void)
     s_msg = mk_label(panel, "", C_TXT, &lv_font_montserrat_16, 820);
     lv_obj_align(s_msg, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    mk_btn(scr, "CHAR",  980, 600, 130, 60, C_MINT, hud_char_cb, NULL);
-    mk_btn(scr, "ITEMS", 1130, 600, 130, 60, C_MINT, hud_inv_cb, NULL);
+    mk_btn(s_hud, "CHAR",  980, 600, 130, 60, C_MINT, hud_char_cb, NULL);
+    mk_btn(s_hud, "ITEMS", 1130, 600, 130, 60, C_MINT, hud_inv_cb, NULL);
 }
 
 static void start_game(void)
 {
     lv_obj_clean(lv_screen_active());
-    s_room_layer = NULL; s_overlay = NULL;
+    s_canvas = NULL; s_zones = NULL; s_hud = NULL; s_overlay = NULL;
+
+    /* full-screen painted-scene canvas (buffer lives in PSRAM, allocated once) */
+    if (!s_canvas_buf)
+        s_canvas_buf = heap_caps_malloc(RR_ART_W * RR_ART_H * 2, MALLOC_CAP_SPIRAM);
+    s_canvas = lv_canvas_create(lv_screen_active());
+    lv_obj_set_pos(s_canvas, 0, 0);
+    if (s_canvas_buf)
+        lv_canvas_set_buffer(s_canvas, s_canvas_buf, RR_ART_W, RR_ART_H,
+                             LV_COLOR_FORMAT_RGB565);
 
     /* fresh character */
     memset(&g, 0, sizeof(g));

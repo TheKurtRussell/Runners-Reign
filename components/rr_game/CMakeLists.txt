@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "rr_game.c" "rr_content.c"
+    SRCS "rr_game.c" "rr_content.c" "rr_scenes.c"
     INCLUDE_DIRS "."
     REQUIRES m5stack_tab5 esp_hw_support
 )
