@@ -6,6 +6,7 @@
  * style of the Genesis cyberpunk RPGs.
  */
 #include "rr_content.h"
+#include <stddef.h>   /* NULL */
 
 const char *rr_item_names[RR_N_ITEMS] = {
     "Maglock keycard",
